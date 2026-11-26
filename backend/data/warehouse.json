@@ -1,0 +1,198 @@
+{
+  "items": {
+    "1": {
+      "id": 1,
+      "sku": "BOLT-M8",
+      "name": "M8 Bolt",
+      "location": "A-01-1",
+      "quantity": 20,
+      "reorder_level": 20,
+      "low_stock": false,
+      "created_at": "2026-11-26T05:01:32.7528487Z",
+      "updated_at": "2026-11-26T06:32:21.5574711Z"
+    },
+    "3": {
+      "id": 3,
+      "sku": "SUDJANL",
+      "name": "sabjdo",
+      "location": "bsdaion",
+      "quantity": 199,
+      "reorder_level": 200,
+      "low_stock": false,
+      "created_at": "2026-11-26T06:33:21.8033118Z",
+      "updated_at": "2026-11-26T06:33:39.4253718Z"
+    },
+    "4": {
+      "id": 4,
+      "sku": "EAFIOSD",
+      "name": "nfdso",
+      "location": "fedsnioksndfio",
+      "quantity": 6233,
+      "reorder_level": 788,
+      "low_stock": false,
+      "created_at": "2026-11-26T06:34:11.5564351Z",
+      "updated_at": "2026-11-26T06:34:17.8656157Z"
+    }
+  },
+  "movements": [
+    {
+      "id": 1,
+      "item_id": 1,
+      "type": "in",
+      "delta": 100,
+      "balance": 100,
+      "note": "initial stock",
+      "created_at": "2026-11-26T05:01:32.7528487Z"
+    },
+    {
+      "id": 2,
+      "item_id": 1,
+      "type": "in",
+      "delta": 500,
+      "balance": 600,
+      "note": "sanipclkewnAckzlnagsvdzcxioaksfndcxpk",
+      "created_at": "2026-11-26T06:30:32.5419477Z"
+    },
+    {
+      "id": 3,
+      "item_id": 1,
+      "type": "out",
+      "delta": -600,
+      "balance": 0,
+      "created_at": "2026-11-26T06:31:03.5015588Z"
+    },
+    {
+      "id": 4,
+      "item_id": 1,
+      "type": "in",
+      "delta": 20,
+      "balance": 20,
+      "created_at": "2026-11-26T06:31:32.6941506Z"
+    },
+    {
+      "id": 5,
+      "item_id": 1,
+      "type": "in",
+      "delta": 40,
+      "balance": 60,
+      "created_at": "2026-11-26T06:31:36.3794277Z"
+    },
+    {
+      "id": 6,
+      "item_id": 1,
+      "type": "in",
+      "delta": 30,
+      "balance": 90,
+      "created_at": "2026-11-26T06:31:40.1714597Z"
+    },
+    {
+      "id": 7,
+      "item_id": 1,
+      "type": "out",
+      "delta": -50,
+      "balance": 40,
+      "created_at": "2026-11-26T06:31:47.0436147Z"
+    },
+    {
+      "id": 8,
+      "item_id": 1,
+      "type": "out",
+      "delta": -10,
+      "balance": 30,
+      "created_at": "2026-11-26T06:31:51.3108647Z"
+    },
+    {
+      "id": 9,
+      "item_id": 1,
+      "type": "in",
+      "delta": 5,
+      "balance": 35,
+      "created_at": "2026-11-26T06:31:55.2652069Z"
+    },
+    {
+      "id": 10,
+      "item_id": 1,
+      "type": "out",
+      "delta": -10,
+      "balance": 25,
+      "created_at": "2026-11-26T06:32:02.620062Z"
+    },
+    {
+      "id": 11,
+      "item_id": 1,
+      "type": "in",
+      "delta": 22,
+      "balance": 47,
+      "created_at": "2026-11-26T06:32:06.4250048Z"
+    },
+    {
+      "id": 12,
+      "item_id": 1,
+      "type": "out",
+      "delta": -24,
+      "balance": 23,
+      "created_at": "2026-11-26T06:32:12.0008167Z"
+    },
+    {
+      "id": 13,
+      "item_id": 1,
+      "type": "out",
+      "delta": -2,
+      "balance": 21,
+      "created_at": "2026-11-26T06:32:17.3359274Z"
+    },
+    {
+      "id": 14,
+      "item_id": 1,
+      "type": "out",
+      "delta": -1,
+      "balance": 20,
+      "created_at": "2026-11-26T06:32:21.5574711Z"
+    },
+    {
+      "id": 16,
+      "item_id": 3,
+      "type": "in",
+      "delta": 700,
+      "balance": 700,
+      "note": "initial stock",
+      "created_at": "2026-11-26T06:33:21.8033118Z"
+    },
+    {
+      "id": 17,
+      "item_id": 3,
+      "type": "out",
+      "delta": -300,
+      "balance": 400,
+      "created_at": "2026-11-26T06:33:29.768362Z"
+    },
+    {
+      "id": 18,
+      "item_id": 3,
+      "type": "out",
+      "delta": -201,
+      "balance": 199,
+      "note": "201",
+      "created_at": "2026-11-26T06:33:39.4253718Z"
+    },
+    {
+      "id": 19,
+      "item_id": 4,
+      "type": "in",
+      "delta": 233,
+      "balance": 233,
+      "note": "initial stock",
+      "created_at": "2026-11-26T06:34:11.5564351Z"
+    },
+    {
+      "id": 20,
+      "item_id": 4,
+      "type": "in",
+      "delta": 6000,
+      "balance": 6233,
+      "created_at": "2026-11-26T06:34:17.8656157Z"
+    }
+  ],
+  "next_item_id": 4,
+  "next_movement_id": 20
+}

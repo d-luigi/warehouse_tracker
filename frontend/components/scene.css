@@ -1,0 +1,162 @@
+.scene {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: linear-gradient(#8ed1f2 0%, #cbebfa 55%, #eaf8ff 100%);
+}
+
+.sun {
+  position: absolute;
+  top: 7vh;
+  right: 9vw;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: #ffe27a;
+  box-shadow: 0 0 0 14px rgba(255, 226, 122, 0.35), 0 0 0 30px rgba(255, 226, 122, 0.18);
+}
+
+/* clouds */
+.cloud {
+  position: absolute;
+  left: 0;
+  height: 34px;
+  width: 110px;
+  border-radius: 34px;
+  background: #fff;
+  animation: drift linear infinite;
+}
+.cloud::before,
+.cloud::after {
+  content: "";
+  position: absolute;
+  background: #fff;
+  border-radius: 50%;
+}
+.cloud::before { width: 44px; height: 44px; left: 16px; top: -22px; }
+.cloud::after { width: 58px; height: 58px; left: 44px; top: -30px; }
+.c1 { top: 14vh; animation-duration: 120s; animation-delay: -40s; }
+.c2 { top: 28vh; width: 90px; animation-duration: 160s; animation-delay: -110s; opacity: 0.85; }
+.c3 { top: 9vh; width: 130px; animation-duration: 200s; animation-delay: -70s; opacity: 0.9; }
+
+@keyframes drift {
+  from { transform: translateX(-200px); }
+  to { transform: translateX(calc(100vw + 200px)); }
+}
+
+/* warehouses slide past slowly */
+.skyline {
+  position: absolute;
+  left: 0;
+  bottom: 104px;
+  height: 100px;
+  width: 100%;
+  overflow: hidden;
+}
+.skyline-track {
+  display: flex;
+  width: max-content;
+  animation: pan 160s linear infinite;
+}
+.skyline-half {
+  display: flex;
+  gap: 56px;
+  padding-right: 56px;
+}
+.wh { flex-shrink: 0; }
+
+@keyframes pan {
+  to { transform: translateX(-50%); }
+}
+
+/* ground */
+.grass {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 92px;
+  height: 34px;
+  background: #9adb9a;
+  border-top: 5px solid #7cc97f;
+}
+.road {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100px;
+  background: #3b4468;
+  border-top: 6px solid #5a6494;
+}
+.road-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 52%;
+  height: 5px;
+  background: repeating-linear-gradient(90deg, #fff6c7 0 36px, transparent 36px 72px);
+  animation: dash 2.4s linear infinite;
+}
+@keyframes dash {
+  from { background-position: 0 0; }
+  to { background-position: -72px 0; }
+}
+
+/* trucks */
+.truck {
+  position: absolute;
+  left: 0;
+  width: 150px;
+  animation: drive linear infinite;
+}
+.truck svg { display: block; width: 100%; height: auto; }
+.truck-near { bottom: 6px; z-index: 3; }
+.truck-far { bottom: 42px; width: 116px; z-index: 2; }
+.t-far1 { animation-duration: 26s; animation-delay: -6s; }
+.t-far2 { animation-duration: 34s; animation-delay: -24s; }
+.t-near { animation-name: driveBack; animation-duration: 17s; animation-delay: -8s; }
+.flip svg { transform: scaleX(-1); }
+
+.bob { animation: bob 0.45s ease-in-out infinite alternate; }
+.wheel {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes drive {
+  from { transform: translateX(-220px); }
+  to { transform: translateX(calc(100vw + 220px)); }
+}
+@keyframes driveBack {
+  from { transform: translateX(calc(100vw + 220px)); }
+  to { transform: translateX(-220px); }
+}
+@keyframes bob {
+  from { transform: translateY(0); }
+  to { transform: translateY(-2px); }
+}
+.flip .bob { animation-name: bobFlip; }
+@keyframes bobFlip {
+  from { transform: scaleX(-1) translateY(0); }
+  to { transform: scaleX(-1) translateY(-2px); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene *,
+  .scene *::before,
+  .scene *::after { animation: none !important; }
+  .t-far1 { left: 14%; }
+  .t-far2 { left: 46%; }
+  .t-near { left: 68%; }
+}
+
+@media (max-height: 620px) {
+  .skyline,
+  .truck-far { display: none; }
+}
