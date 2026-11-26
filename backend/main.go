@@ -14,36 +14,40 @@ import (
 	"warehouse_tracker/internal/store"
 )
 
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func main() {
-	addr := ":" + getenv("PORT", "8080")
-	dataFile := getenv("DATA_FILE", "data/warehouse.json")
-
-	st, err := store.New(dataFile)
-	if err != nil {
-		log.Fatalf("open store: %v", err)
+	// Render provides PORT; locally it falls back to 8080.
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           handlers.New(st).Routes(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL is not set. Example: postgres://warehouse:warehouse@localhost:5432/warehouse?sslmode=disable")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	connectCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	st, err := store.New(connectCtx, dbURL)
+	cancel()
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	defer st.Close()
+
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           handlers.New(st).Routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	go func() {
-		log.Printf("warehouse tracker API listening on %s (data: %s)", addr, dataFile)
+		log.Printf("warehouse tracker API listening on :%s", port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server: %v", err)
 		}

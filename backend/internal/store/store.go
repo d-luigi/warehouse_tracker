@@ -1,22 +1,24 @@
-// Package store is a small thread-safe data layer. Everything lives in memory
-// and is persisted to a JSON file after each write, so there are no external
-// dependencies. Swap this package for a SQL implementation later without
-// touching the handlers (keep the method signatures).
+// Package store is the PostgreSQL data layer (pgx v5 connection pool).
+// The schema is created automatically on startup (see schema.sql).
 package store
 
 import (
-	"encoding/json"
+	"context"
+	_ "embed"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"warehouse_tracker/internal/models"
 )
+
+//go:embed schema.sql
+var schema string
 
 var (
 	ErrNotFound          = errors.New("not found")
@@ -29,121 +31,112 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
-type fileData struct {
-	Items          map[int]*models.Item `json:"items"`
-	Movements      []models.Movement    `json:"movements"`
-	NextItemID     int                  `json:"next_item_id"`
-	NextMovementID int                  `json:"next_movement_id"`
-}
-
-// Store holds all warehouse data.
+// Store wraps a pgx connection pool.
 type Store struct {
-	mu   sync.RWMutex
-	path string // empty = no persistence (useful for tests)
-	data fileData
+	pool *pgxpool.Pool
 }
 
-// New opens (or creates) a store backed by the JSON file at path.
-func New(path string) (*Store, error) {
-	s := &Store{
-		path: path,
-		data: fileData{Items: map[int]*models.Item{}},
+// New connects to PostgreSQL, checks the connection and creates the tables.
+func New(ctx context.Context, databaseURL string) (*Store, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
-	if path == "" {
-		return s, nil
-	}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
+	cfg.MaxConns = 10
+	cfg.MaxConnIdleTime = 5 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > 0 {
-		if err := json.Unmarshal(b, &s.data); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
+
+	// Render's database can take a moment to accept connections after a cold start.
+	var pingErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		pingErr = pool.Ping(ctx)
+		if pingErr == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			pool.Close()
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * time.Second):
 		}
 	}
-	if s.data.Items == nil {
-		s.data.Items = map[int]*models.Item{}
+	if pingErr != nil {
+		pool.Close()
+		return nil, fmt.Errorf("connect to database: %w", pingErr)
 	}
-	return s, nil
+
+	if _, err := pool.Exec(ctx, schema); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	return &Store{pool: pool}, nil
 }
 
-// saveLocked writes the data atomically. Caller must hold the write lock.
-func (s *Store) saveLocked() error {
-	if s.path == "" {
-		return nil
-	}
-	b, err := json.MarshalIndent(s.data, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
-}
+func (s *Store) Close()                         { s.pool.Close() }
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 func normSKU(sku string) string { return strings.ToUpper(strings.TrimSpace(sku)) }
 
-func withFlags(it *models.Item) models.Item {
-	c := *it
-	c.LowStock = c.ReorderLevel > 0 && c.Quantity <= c.ReorderLevel
-	return c
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-func (s *Store) skuTakenLocked(sku string, exceptID int) bool {
-	for _, it := range s.data.Items {
-		if it.ID != exceptID && it.SKU == sku {
-			return true
-		}
+const itemCols = `id, sku, name, description, location, quantity, reorder_level, created_at, updated_at`
+
+func scanItem(row pgx.Row) (models.Item, error) {
+	var it models.Item
+	err := row.Scan(&it.ID, &it.SKU, &it.Name, &it.Description, &it.Location,
+		&it.Quantity, &it.ReorderLevel, &it.CreatedAt, &it.UpdatedAt)
+	if err != nil {
+		return models.Item{}, err
 	}
-	return false
+	it.LowStock = it.ReorderLevel > 0 && it.Quantity <= it.ReorderLevel
+	return it, nil
 }
 
 // ---------- Items ----------
 
-// ListItems returns items sorted by ID. q filters on SKU/name/location
+// ListItems returns items ordered by ID. q filters on SKU/name/location
 // (case-insensitive substring); lowOnly keeps only low-stock items.
-func (s *Store) ListItems(q string, lowOnly bool) []models.Item {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	q = strings.ToLower(strings.TrimSpace(q))
-	out := make([]models.Item, 0, len(s.data.Items))
-	for _, it := range s.data.Items {
-		v := withFlags(it)
-		if lowOnly && !v.LowStock {
-			continue
-		}
-		if q != "" &&
-			!strings.Contains(strings.ToLower(v.SKU), q) &&
-			!strings.Contains(strings.ToLower(v.Name), q) &&
-			!strings.Contains(strings.ToLower(v.Location), q) {
-			continue
-		}
-		out = append(out, v)
+func (s *Store) ListItems(ctx context.Context, q string, lowOnly bool) ([]models.Item, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+itemCols+` FROM items
+		WHERE ($1::text = ''
+		       OR strpos(lower(sku), lower($1::text)) > 0
+		       OR strpos(lower(name), lower($1::text)) > 0
+		       OR strpos(lower(location), lower($1::text)) > 0)
+		  AND (NOT $2::boolean OR (reorder_level > 0 AND quantity <= reorder_level))
+		ORDER BY id`, strings.TrimSpace(q), lowOnly)
+	if err != nil {
+		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
+	defer rows.Close()
+
+	out := make([]models.Item, 0)
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }
 
-func (s *Store) GetItem(id int) (models.Item, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	it, ok := s.data.Items[id]
-	if !ok {
+func (s *Store) GetItem(ctx context.Context, id int) (models.Item, error) {
+	it, err := scanItem(s.pool.QueryRow(ctx, `SELECT `+itemCols+` FROM items WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return models.Item{}, ErrNotFound
 	}
-	return withFlags(it), nil
+	return it, err
 }
 
-func (s *Store) CreateItem(in models.ItemInput) (models.Item, error) {
+func (s *Store) CreateItem(ctx context.Context, in models.ItemInput) (models.Item, error) {
 	sku := normSKU(in.SKU)
 	name := strings.TrimSpace(in.Name)
 	switch {
@@ -157,36 +150,39 @@ func (s *Store) CreateItem(in models.ItemInput) (models.Item, error) {
 		return models.Item{}, invalid("reorder_level cannot be negative")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.skuTakenLocked(sku, 0) {
-		return models.Item{}, ErrDuplicateSKU
-	}
-	now := time.Now().UTC()
-	s.data.NextItemID++
-	it := &models.Item{
-		ID:           s.data.NextItemID,
-		SKU:          sku,
-		Name:         name,
-		Description:  strings.TrimSpace(in.Description),
-		Location:     strings.TrimSpace(in.Location),
-		Quantity:     in.Quantity,
-		ReorderLevel: in.ReorderLevel,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	}
-	s.data.Items[it.ID] = it
-	if it.Quantity > 0 {
-		s.addMovementLocked(it, models.MovementIn, it.Quantity, "initial stock", now)
-	}
-	if err := s.saveLocked(); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return models.Item{}, err
 	}
-	return withFlags(it), nil
+	defer tx.Rollback(ctx)
+
+	it, err := scanItem(tx.QueryRow(ctx, `
+		INSERT INTO items (sku, name, description, location, quantity, reorder_level)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING `+itemCols,
+		sku, name, strings.TrimSpace(in.Description), strings.TrimSpace(in.Location),
+		in.Quantity, in.ReorderLevel))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return models.Item{}, ErrDuplicateSKU
+		}
+		return models.Item{}, err
+	}
+
+	if it.Quantity > 0 {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO movements (item_id, type, delta, balance, note)
+			VALUES ($1, 'in', $2, $2, 'initial stock')`, it.ID, it.Quantity); err != nil {
+			return models.Item{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return models.Item{}, err
+	}
+	return it, nil
 }
 
-func (s *Store) UpdateItem(id int, in models.ItemUpdate) (models.Item, error) {
+func (s *Store) UpdateItem(ctx context.Context, id int, in models.ItemUpdate) (models.Item, error) {
 	sku := normSKU(in.SKU)
 	name := strings.TrimSpace(in.Name)
 	switch {
@@ -198,72 +194,54 @@ func (s *Store) UpdateItem(id int, in models.ItemUpdate) (models.Item, error) {
 		return models.Item{}, invalid("reorder_level cannot be negative")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	it, ok := s.data.Items[id]
-	if !ok {
+	it, err := scanItem(s.pool.QueryRow(ctx, `
+		UPDATE items
+		SET sku = $2, name = $3, description = $4, location = $5,
+		    reorder_level = $6, updated_at = now()
+		WHERE id = $1
+		RETURNING `+itemCols,
+		id, sku, name, strings.TrimSpace(in.Description), strings.TrimSpace(in.Location), in.ReorderLevel))
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
 		return models.Item{}, ErrNotFound
-	}
-	if s.skuTakenLocked(sku, id) {
+	case isUniqueViolation(err):
 		return models.Item{}, ErrDuplicateSKU
-	}
-	it.SKU = sku
-	it.Name = name
-	it.Description = strings.TrimSpace(in.Description)
-	it.Location = strings.TrimSpace(in.Location)
-	it.ReorderLevel = in.ReorderLevel
-	it.UpdatedAt = time.Now().UTC()
-	if err := s.saveLocked(); err != nil {
+	case err != nil:
 		return models.Item{}, err
 	}
-	return withFlags(it), nil
+	return it, nil
 }
 
-// DeleteItem removes an item and its movement history.
-func (s *Store) DeleteItem(id int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.data.Items[id]; !ok {
+// DeleteItem removes an item; its movements are removed by ON DELETE CASCADE.
+func (s *Store) DeleteItem(ctx context.Context, id int) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM items WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	delete(s.data.Items, id)
-	kept := make([]models.Movement, 0, len(s.data.Movements))
-	for _, m := range s.data.Movements {
-		if m.ItemID != id {
-			kept = append(kept, m)
-		}
-	}
-	s.data.Movements = kept
-	return s.saveLocked()
+	return nil
 }
 
 // ---------- Movements ----------
 
-func (s *Store) addMovementLocked(it *models.Item, typ string, delta int, note string, at time.Time) models.Movement {
-	s.data.NextMovementID++
-	m := models.Movement{
-		ID:        s.data.NextMovementID,
-		ItemID:    it.ID,
-		Type:      typ,
-		Delta:     delta,
-		Balance:   it.Quantity,
-		Note:      strings.TrimSpace(note),
-		CreatedAt: at,
+// RecordMovement applies a stock movement inside a transaction. The item row is
+// locked (FOR UPDATE) so two simultaneous shipments cannot oversell the stock.
+func (s *Store) RecordMovement(ctx context.Context, itemID int, in models.MovementInput) (models.Movement, models.Item, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return models.Movement{}, models.Item{}, err
 	}
-	s.data.Movements = append(s.data.Movements, m)
-	return m
-}
+	defer tx.Rollback(ctx)
 
-// RecordMovement applies a stock movement and returns it with the updated item.
-func (s *Store) RecordMovement(itemID int, in models.MovementInput) (models.Movement, models.Item, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	it, ok := s.data.Items[itemID]
-	if !ok {
+	var current int
+	err = tx.QueryRow(ctx, `SELECT quantity FROM items WHERE id = $1 FOR UPDATE`, itemID).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return models.Movement{}, models.Item{}, ErrNotFound
+	}
+	if err != nil {
+		return models.Movement{}, models.Item{}, err
 	}
 
 	var delta int
@@ -277,7 +255,7 @@ func (s *Store) RecordMovement(itemID int, in models.MovementInput) (models.Move
 		if in.Quantity <= 0 {
 			return models.Movement{}, models.Item{}, invalid("quantity must be greater than 0")
 		}
-		if in.Quantity > it.Quantity {
+		if in.Quantity > current {
 			return models.Movement{}, models.Item{}, ErrInsufficientStock
 		}
 		delta = -in.Quantity
@@ -285,51 +263,77 @@ func (s *Store) RecordMovement(itemID int, in models.MovementInput) (models.Move
 		if in.Quantity < 0 {
 			return models.Movement{}, models.Item{}, invalid("quantity cannot be negative")
 		}
-		delta = in.Quantity - it.Quantity
+		delta = in.Quantity - current
 	default:
 		return models.Movement{}, models.Item{}, invalid("type must be one of: in, out, adjust")
 	}
+	balance := current + delta
 
-	now := time.Now().UTC()
-	it.Quantity += delta
-	it.UpdatedAt = now
-	m := s.addMovementLocked(it, in.Type, delta, in.Note, now)
-	if err := s.saveLocked(); err != nil {
+	it, err := scanItem(tx.QueryRow(ctx, `
+		UPDATE items SET quantity = $2, updated_at = now()
+		WHERE id = $1 RETURNING `+itemCols, itemID, balance))
+	if err != nil {
 		return models.Movement{}, models.Item{}, err
 	}
-	return m, withFlags(it), nil
+
+	m := models.Movement{
+		ItemID:  itemID,
+		Type:    in.Type,
+		Delta:   delta,
+		Balance: balance,
+		Note:    strings.TrimSpace(in.Note),
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO movements (item_id, type, delta, balance, note)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, created_at`,
+		m.ItemID, m.Type, m.Delta, m.Balance, m.Note).Scan(&m.ID, &m.CreatedAt)
+	if err != nil {
+		return models.Movement{}, models.Item{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.Movement{}, models.Item{}, err
+	}
+	return m, it, nil
 }
 
-// ListMovements returns the ledger, newest first. itemID 0 means all items.
-func (s *Store) ListMovements(itemID int) []models.Movement {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// ListMovements returns the ledger, newest first (max 1000 rows). itemID 0 means all items.
+func (s *Store) ListMovements(ctx context.Context, itemID int) ([]models.Movement, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, item_id, type, delta, balance, note, created_at
+		FROM movements
+		WHERE ($1::bigint = 0 OR item_id = $1::bigint)
+		ORDER BY id DESC
+		LIMIT 1000`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
 	out := make([]models.Movement, 0)
-	for i := len(s.data.Movements) - 1; i >= 0; i-- {
-		m := s.data.Movements[i]
-		if itemID == 0 || m.ItemID == itemID {
-			out = append(out, m)
+	for rows.Next() {
+		var m models.Movement
+		if err := rows.Scan(&m.ID, &m.ItemID, &m.Type, &m.Delta, &m.Balance, &m.Note, &m.CreatedAt); err != nil {
+			return nil, err
 		}
+		out = append(out, m)
 	}
-	return out
+	return out, rows.Err()
 }
 
 // ---------- Summary ----------
 
-func (s *Store) Summary() models.Summary {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	sum := models.Summary{
-		TotalItems:     len(s.data.Items),
-		TotalMovements: len(s.data.Movements),
+func (s *Store) Summary(ctx context.Context) (models.Summary, error) {
+	var sum models.Summary
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*),
+		       COALESCE(SUM(quantity), 0),
+		       COUNT(*) FILTER (WHERE reorder_level > 0 AND quantity <= reorder_level)
+		FROM items`).Scan(&sum.TotalItems, &sum.TotalUnits, &sum.LowStockItems)
+	if err != nil {
+		return sum, err
 	}
-	for _, it := range s.data.Items {
-		sum.TotalUnits += it.Quantity
-		if withFlags(it).LowStock {
-			sum.LowStockItems++
-		}
-	}
-	return sum
+	err = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM movements`).Scan(&sum.TotalMovements)
+	return sum, err
 }
