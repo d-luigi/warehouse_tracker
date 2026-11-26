@@ -1,10 +1,11 @@
-# Render Blueprint: creates the API and its PostgreSQL database together.
-# Put this file in the ROOT of your git repo (next to the backend and frontend folders).
+# Render Blueprint: creates the Go API and its PostgreSQL database together.
+# Keep this file in the ROOT of your git repo (next to the backend and frontend folders).
 databases:
   - name: warehouse-db
     databaseName: warehouse
     user: warehouse
     plan: free
+    ipAllowList: []   # only Render services in your account can connect (no outside access)
 
 services:
   - type: web
@@ -12,7 +13,8 @@ services:
     runtime: go
     rootDir: backend
     plan: free
-    buildCommand: go build -o app .
+    # `go mod tidy` fetches pgx and creates go.sum on the build server.
+    buildCommand: go mod tidy && go build -o app .
     startCommand: ./app
     healthCheckPath: /api/health
     envVars:
@@ -21,4 +23,4 @@ services:
           name: warehouse-db
           property: connectionString
       - key: CORS_ORIGIN
-        sync: false   # you enter this in the Render dashboard (your Vercel URL)
+        sync: false   # you enter this in the Render dashboard (your frontend URL)

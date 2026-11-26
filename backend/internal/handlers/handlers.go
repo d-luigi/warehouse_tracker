@@ -90,17 +90,32 @@ func fail(w http.ResponseWriter, err error) {
 // ---------- handlers ----------
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.Ping(r.Context()); err != nil {
+		log.Printf("health: %v", err)
+		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (a *API) summary(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.Summary())
+	sum, err := a.store.Summary(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
 }
 
 func (a *API) listItems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	low := r.URL.Query().Get("low_stock") == "true"
-	writeJSON(w, http.StatusOK, a.store.ListItems(q, low))
+	items, err := a.store.ListItems(r.Context(), q, low)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (a *API) createItem(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +123,7 @@ func (a *API) createItem(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	it, err := a.store.CreateItem(in)
+	it, err := a.store.CreateItem(r.Context(), in)
 	if err != nil {
 		fail(w, err)
 		return
@@ -122,7 +137,7 @@ func (a *API) getItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	it, err := a.store.GetItem(id)
+	it, err := a.store.GetItem(r.Context(), id)
 	if err != nil {
 		fail(w, err)
 		return
@@ -139,7 +154,7 @@ func (a *API) updateItem(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	it, err := a.store.UpdateItem(id, in)
+	it, err := a.store.UpdateItem(r.Context(), id, in)
 	if err != nil {
 		fail(w, err)
 		return
@@ -152,7 +167,7 @@ func (a *API) deleteItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.store.DeleteItem(id); err != nil {
+	if err := a.store.DeleteItem(r.Context(), id); err != nil {
 		fail(w, err)
 		return
 	}
@@ -164,11 +179,16 @@ func (a *API) itemMovements(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := a.store.GetItem(id); err != nil {
+	if _, err := a.store.GetItem(r.Context(), id); err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.ListMovements(id))
+	ms, err := a.store.ListMovements(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ms)
 }
 
 func (a *API) createMovement(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +200,7 @@ func (a *API) createMovement(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	m, it, err := a.store.RecordMovement(id, in)
+	m, it, err := a.store.RecordMovement(r.Context(), id, in)
 	if err != nil {
 		fail(w, err)
 		return
@@ -189,5 +209,10 @@ func (a *API) createMovement(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listMovements(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.ListMovements(0))
+	ms, err := a.store.ListMovements(r.Context(), 0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ms)
 }
